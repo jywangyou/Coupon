@@ -1,5 +1,6 @@
 import express from 'express'
 import crypto from 'node:crypto'
+import { pathToFileURL } from 'node:url'
 
 const app = express()
 const port = Number(process.env.API_PORT || 3001)
@@ -145,6 +146,12 @@ app.post('/api/tpwd', async (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
 
-app.listen(port, () => {
-  console.log(`Coupon API listening on http://localhost:${port}`)
-})
+// Only listen when this file is executed directly. Vercel imports the app.
+const isMainModule = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (isMainModule) {
+  app.listen(port, () => {
+    console.log(`Coupon API listening on http://localhost:${port}`)
+  })
+}
+
+export default app
