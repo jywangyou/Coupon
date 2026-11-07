@@ -38,6 +38,7 @@ D:\Coupon
 │  └─ styles.css       # Tailwind 和全局样式
 ├─ server\
 │  └─ index.js         # 淘宝客 API 服务和签名逻辑
+├─ api\                # Vercel Serverless Function 入口
 ├─ index.html
 ├─ vite.config.js      # Vite 开发服务器和 API 代理
 ├─ tailwind.config.js
@@ -134,6 +135,10 @@ Node API 仍然需要单独启动：
 ```bash
 npm run dev:api
 ```
+
+## Vercel 部署
+
+项目根目录的 `api` 文件夹会被 Vercel 自动部署为 Serverless Functions，前端继续使用同源的 `/api/*` 地址即可。请在 Vercel 项目的 Environment Variables 中配置 `TAOBAO_APPKEY`、`TAOBAO_SECRET`、`TAOBAO_ADZONE_ID` 和 `TAOBAO_SESSION`，然后重新部署项目。
 
 ## API 接口
 
