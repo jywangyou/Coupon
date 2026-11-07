@@ -27,6 +27,26 @@ button { -webkit-tap-highlight-color: transparent; }
 .van-button--primary { background: #ff4d4f; border-color: #ff4d4f; }
 .van-toast { background: rgba(31,35,41,.9); }
 
+.detail-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  height: 52px;
+  padding: 0 16px;
+  background: rgba(247,248,250,0.95);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line, #e5e7eb);
+}
+
+.detail-body {
+  padding: 16px 20px 28px;
+  overflow-y: auto;
+  max-height: calc(100vh - 52px);
+}
+
 @media (max-width: 640px) {
   .content-width { width: min(100% - 24px, 560px); }
+  .detail-body { padding: 16px 16px 28px; }
 }
