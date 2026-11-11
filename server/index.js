@@ -14,18 +14,18 @@ app.use(express.json({ limit: '256kb' }))
 
 const categories = [
   { id: 'all', label: '精选', materialIds: ['27446','13366','3786','3756','30443','28026','96177','96180','96184','96185'], icon: 'ri-sparkling-2-line' },
+  { id: 'food', label: '食品', materialIds: ['27451','13375','96183','3791','86614','3761'], icon: 'ri-cake-3-line' },
   { id: 'daily', label: '天天特卖', materialIds: ['31362','86594','39313','86595','44413','86589'], icon: 'ri-flashlight-line' },
   { id: 'women', label: '女装', materialIds: ['27448','13367','3788','86623','3767'], icon: 'ri-shirt-line' },
   { id: 'men', label: '男装', materialIds: ['13372','3790','86618','3764'], icon: 'ri-windy-line' },
-  { id: 'food', label: '食品', materialIds: ['27451','13375','96183','3791','86614','3761'], icon: 'ri-cake-3-line' },
   { id: 'beauty', label: '美妆个护', materialIds: ['27453','13371','96182','3794','86619','3763'], icon: 'ri-magic-line' },
   { id: 'home', label: '家居家装', materialIds: ['27798','13368','3792','86622','3758'], icon: 'ri-home-5-line' },
   { id: 'mother', label: '母婴', materialIds: ['27454','13374','96181','3789','86616','3760','4040','4041','4044','4042','4043','4045'], icon: 'ri-bear-smile-line' },
   { id: 'digital', label: '数码家电', materialIds: ['96179','13369','3793','86621','3759'], icon: 'ri-computer-line' },
-  { id: 'shoes', label: '鞋包配饰', materialIds: ['13370','3796','86620','3762'], icon: 'ri-shoe-print-line' },
+  { id: 'shoes', label: '鞋包配饰', materialIds: ['13370','3796','86620','3762'], icon: 'ri-briefcase-3-line' },
   { id: 'underwear', label: '内衣', materialIds: ['13373','96178','3787','86617','3765'], icon: 'ri-user-heart-line' },
   { id: 'sport', label: '运动户外', materialIds: ['13376','3795','86615','3766'], icon: 'ri-bike-line' },
-  { id: 'pet', label: '宠物', materialIds: ['78393','78393'], icon: 'ri-paw-print-line' }
+  { id: 'pet', label: '宠物', materialIds: ['78393','78393'], icon: 'ri-baidu-line' }
 ]
 
 // 淘宝 TOP API 的签名：按参数名排序后用 Secret + 参数串 + Secret 计算 MD5。
@@ -75,13 +75,17 @@ function normalizeProduct(item, index) {
   const coupon = Number(pickFirst(pathList?.promotion_fee, pickFirst(item.coupon_amount, Math.max(0, originalPrice - finalPrice)))) || 0
   const link = pickFirst(item.publish_info?.coupon_share_url, pickFirst(item.coupon_share_url, pickFirst(item.publish_info?.click_url, item.click_url)))
   const primaryImage = String(pickFirst(base.pict_url, pickFirst(item.pict_url, ''))).replace(/^\/\//, 'https://')
-  const rawImages = Array.isArray(base.small_images) ? base.small_images
-      : Array.isArray(item.small_images) ? item.small_images
-      : (base.small_images || item.small_images ? [String(base.small_images || item.small_images)] : [])
-    const smallImages = rawImages
-      .map(s => String(s).replace(/^\/\//, 'https://'))
-      .filter(s => s && s !== primaryImage)
-  const images = [primaryImage, ...smallImages].filter(Boolean)
+  const images = [primaryImage].filter(Boolean)
+  const isValidImageUrl = (u) => /^https?:\/\/.+/.test(u) && !/^(undefined|null|object|object\[)\]/i.test(u)
+  for (const field of [base, item]) {
+    const si = field?.small_images
+    if (Array.isArray(si)) {
+      si.map(s => String(s).replace(/^\/\//, 'https://')).filter(isValidImageUrl).forEach(u => { if (!images.includes(u)) images.push(u) })
+    } else if (typeof si === 'string') {
+      si.split(',').map(s => s.trim().replace(/^\/\//, 'https://')).filter(isValidImageUrl).forEach(u => { if (!images.includes(u)) images.push(u) })
+    }
+  }
+  if (images.length === 1 && !isValidImageUrl(images[0])) return null
   return {
     id: String(pickFirst(base.item_id, pickFirst(item.item_id, `taobao-${index}`))),
     title: pickFirst(base.title, pickFirst(item.title, '淘宝精选好物')),
@@ -102,6 +106,19 @@ function getMapData(data) {
     || data?.tbk_dg_material_optional_upgrade_response?.result_list?.map_data
     || []
   return Array.isArray(result) ? result : []
+}
+
+// 跨请求物料进度记录：每个分类记录当前游标位置
+// key: categoryId, value: { materialIdx, pageNo, hasMoreInCurrent }
+const materialCursor = new Map()
+
+function getCursor(categoryId, idsLength) {
+  let c = materialCursor.get(categoryId)
+  if (!c || c.materialIdx >= idsLength) {
+    c = { materialIdx: 0, pageNo: 1, hasMoreInCurrent: true }
+    materialCursor.set(categoryId, c)
+  }
+  return c
 }
 
 app.get('/api/categories', (_req, res) => {
@@ -125,17 +142,28 @@ app.get('/api/products', async (req, res) => {
       if (!products.length) throw new Error('淘宝接口没有返回商品')
       res.json({ products, page, hasMore: products.length >= size, source: 'taobao' })
     } else {
-      // 多物料ID轮询：每页切换一次物料ID，同一物料内用递增的 pageNo 翻页
+      // 多物料ID顺序翻页：
+      // 每个物料内部翻页，翻完（数据不足size）才切到下一个物料的第1页
+      // 用游标记录每个分类的进度，跨请求累加
       const ids = category.materialIds
+      const cursor = getCursor(category.id, ids.length)
+
+      // 前端主动重新请求第1页时重置游标
+      if (page === 1) {
+        cursor.materialIdx = 0
+        cursor.pageNo = 1
+        cursor.hasMoreInCurrent = true
+      }
+
       let products = []
+      let rawCount = 0
       let currentMaterial = ''
-      let pageNo = 0
-      let lastRaw = 0
-      // 从当前页开始尝试，如果没数据就依次 fallback 到下一个物料
-      for (let offset = 0; offset < ids.length && !products.length; offset++) {
-        const idx = ((page - 1) + offset) % ids.length
+      let consumedAll = true // 所有物料是否都翻完了
+
+      for (let i = 0; i < ids.length; i++) {
+        const idx = (cursor.materialIdx + i) % ids.length
         currentMaterial = ids[idx]
-        pageNo = Math.floor(((page - 1) + offset) / ids.length) + 1
+        const pNo = i === 0 ? cursor.pageNo : 1
         const data = await callTop('taobao.tbk.dg.material.recommend', {
           fields: 'user_id,item_id,title,pict_url,small_images,shop_title,volume,zk_final_price,reserve_price,coupon_amount,coupon_share_url,click_url',
           adzone_id: adzoneId,
@@ -143,15 +171,59 @@ app.get('/api/products', async (req, res) => {
           device_type: 'MOBILE',
           device_value: 'coupon-web',
           page_size: String(size),
-          page_no: String(pageNo)
+          page_no: String(pNo)
         })
         const raw = getMapData(data)
-        lastRaw = raw.length
-        products = raw.map(normalizeProduct).filter(p => p.link && p.image)
+        rawCount = raw.length
+        const norm = raw.map(normalizeProduct).filter(p => p.link && p.image)
+        const filled = norm.length >= size
+
+        if (i === 0) {
+          // 当前游标物料：请求第 pageNo 页
+          products = norm
+          if (filled) {
+            cursor.pageNo++
+            cursor.hasMoreInCurrent = true
+            consumedAll = false
+          } else {
+            // 当前物料翻完，切到下一个
+            cursor.materialIdx = (cursor.materialIdx + 1) % ids.length
+            cursor.pageNo = 1
+            cursor.hasMoreInCurrent = ids.length > 1
+            // 如果只有1个物料且翻完了，就结束
+            if (ids.length === 1) consumedAll = true
+          }
+          break
+        } else {
+          // fallback 到第 i 个物料：请求第1页
+          products = norm
+          if (filled) {
+            cursor.materialIdx = idx
+            cursor.pageNo = 2
+            cursor.hasMoreInCurrent = true
+            consumedAll = false
+          } else {
+            // 这个物料第1页也不足，继续 fallback
+            if (i === ids.length - 1) {
+              // 最后一个物料也不足 → 全部翻完
+              cursor.materialIdx = 0
+              cursor.pageNo = 1
+              cursor.hasMoreInCurrent = false
+              consumedAll = true
+            } else {
+              // 继续下一个
+              cursor.materialIdx = (idx + 1) % ids.length
+              cursor.pageNo = 1
+            }
+            products = []
+            continue
+          }
+          break
+        }
       }
-      // 有数据或还有未尝试的物料则继续加载
-      const hasMore = products.length > 0 || (page - 1) < ids.length
-      res.json({ products, page, hasMore, source: 'taobao', debug: { material_id: currentMaterial, page_no: pageNo, raw_count: lastRaw } })
+
+      const hasMore = !consumedAll
+      res.json({ products, page, hasMore, source: 'taobao', debug: { material_id: currentMaterial, raw_count: rawCount, cursor: { materialIdx: cursor.materialIdx, pageNo: cursor.pageNo, hasMoreInCurrent: cursor.hasMoreInCurrent, consumedAll } } })
     }
   } catch (error) {
     console.error('[/api/products] error:', error.message, { category: category.id, page })

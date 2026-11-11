@@ -1,22 +1,22 @@
 ﻿<script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { closeToast, showLoadingToast, showToast } from 'vant'
+import { closeToast, showLoadingToast, showToast, showImagePreview } from 'vant'
 import logoUrl from './assets/logo.png'
 
 const fallbackCategories = [
   { id: 'all', label: '精选', icon: 'ri-sparkling-2-line' },
+  { id: 'food', label: '食品', icon: 'ri-cake-3-line' },
   { id: 'daily', label: '天天特卖', icon: 'ri-flashlight-line' },
   { id: 'women', label: '女装', icon: 'ri-shirt-line' },
   { id: 'men', label: '男装', icon: 'ri-windy-line' },
-  { id: 'food', label: '食品', icon: 'ri-cake-3-line' },
   { id: 'beauty', label: '美妆个护', icon: 'ri-magic-line' },
   { id: 'home', label: '家居家装', icon: 'ri-home-5-line' },
   { id: 'mother', label: '母婴', icon: 'ri-bear-smile-line' },
   { id: 'digital', label: '数码家电', icon: 'ri-computer-line' },
-  { id: 'shoes', label: '鞋包配饰', icon: 'ri-shoe-print-line' },
+  { id: 'shoes', label: '鞋包配饰', icon: 'ri-briefcase-3-line' },
   { id: 'underwear', label: '内衣', icon: 'ri-user-heart-line' },
   { id: 'sport', label: '运动户外', icon: 'ri-bike-line' },
-  { id: 'pet', label: '宠物', icon: 'ri-paw-print-line' }
+  { id: 'pet', label: '宠物', icon: 'ri-baidu-line' }
 ]
 
 const categories = ref(fallbackCategories)
@@ -30,6 +30,7 @@ const page = ref(1)
 const loading = ref(false)
 const hasMore = ref(true)
 const isMobile = ref(false)
+const categoryCache = {}
 const detailPosition = computed(() => isMobile.value ? 'right' : 'center')
 const detailPopupStyle = computed(() => isMobile.value ? { width: 'min(90vw, 520px)', height: '100%' } : { width: 'min(560px, calc(100vw - 32px))', height: '88vh', borderRadius: '12px' })
 const selectedProduct = ref(null)
@@ -37,6 +38,10 @@ const showDetail = ref(false)
 const detailImageIndex = ref(0)
 const searchModalInput = ref(null)
 const scrollSentinel = ref(null)
+const tabListRef = ref(null)
+const swipeRef = ref(null)
+const contentSectionRef = ref(null)
+const showBackTop = ref(false)
 let observer = null
 
 const selectedCategoryLabel = computed(() => categories.value.find(item => item.id === activeCategory.value)?.label || '精选')
@@ -54,7 +59,7 @@ function formatSold(value) {
 }
 
 // 请求真实淘宝商品。reset 为 true 时会清空旧列表并从第一页重新加载。
-async function requestProducts(reset = false) {
+async function requestProducts(reset = false, scrollToTop = false) {
   if (loading.value || (!hasMore.value && !reset)) return
   if (reset) {
     page.value = 1
@@ -76,19 +81,43 @@ async function requestProducts(reset = false) {
     hasMore.value = Boolean(data.hasMore)
     if (!data.products.length && reset) showToast('暂时没有找到相关优惠券')
     page.value += 1
+    // 缓存当前 tab 的数据
+    if (!isSearchView.value) {
+      categoryCache[activeCategory.value] = {
+        products: [...products.value],
+        page: page.value,
+        hasMore: hasMore.value
+      }
+    }
   } catch {
     if (reset) showToast('网络开小差了，请稍后再试')
   } finally {
     loading.value = false
   }
+  if (scrollToTop) {
+    await nextTick()
+    const el = contentSectionRef.value
+    if (el) el.scrollTop = 0
+  }
 }
 
-function chooseCategory(category) {
+async function chooseCategory(category) {
+  if (activeCategory.value === category.id) return
   activeCategory.value = category.id
   isSearchView.value = false
   query.value = ''
   searchDraft.value = ''
-  requestProducts(true)
+  // 缓存命中则直接恢复，不请求，保持当前滚动位置
+  const cached = categoryCache[category.id]
+  if (cached && cached.products.length > 0) {
+    products.value = cached.products
+    page.value = cached.page
+    hasMore.value = cached.hasMore
+    loading.value = false
+    return
+  }
+  // 目标 tab 无缓存 → 请求并滚动到 section 顶部
+  await requestProducts(true, true)
 }
 
 function openSearch() {
@@ -103,6 +132,7 @@ function submitSearch() {
   query.value = keyword
   isSearchView.value = true
   showSearch.value = false
+  showBackTop.value = false
   requestProducts(true)
 }
 
@@ -111,7 +141,15 @@ function closeSearchView() {
   query.value = ''
   searchDraft.value = ''
   activeCategory.value = 'all'
-  requestProducts(true)
+  const cached = categoryCache['all']
+  if (cached && cached.products.length > 0) {
+    products.value = cached.products
+    page.value = cached.page
+    hasMore.value = cached.hasMore
+    loading.value = false
+  } else {
+    requestProducts(true, true)
+  }
 }
 
 // 点击卡片后交给 Vant Popup：PC 居中，移动端从右侧滑入。
@@ -119,27 +157,63 @@ function openDetail(product) {
   selectedProduct.value = product
   detailImageIndex.value = 0
   showDetail.value = true
+  nextTick(() => {
+    document.querySelector('.detail-body')?.scrollTo(0, 0)
+  })
 }
 
-const showImagePreviewRef = ref(false)
-const previewImagesList = computed(() => {
+const detailImages = computed(() => {
   if (!selectedProduct.value) return []
-  return selectedProduct.value.images && selectedProduct.value.images.length > 1
-    ? selectedProduct.value.images
-    : [selectedProduct.value.image]
+  const imgs = selectedProduct.value.images
+  return (Array.isArray(imgs) && imgs.length > 1) ? imgs : [selectedProduct.value.image]
 })
 
+const previewImagesList = computed(() => detailImages.value)
+
 function openImagePreview() {
-  detailImageIndex.value = 0
-  showImagePreviewRef.value = true
+  if (!previewImagesList.value.length) return
+  return showImagePreview({
+    images: previewImagesList.value,
+    startPosition: detailImageIndex.value,
+    closeable: true,
+    closeOnPopstate: false
+  })
 }
 
-function closeImagePreview() {
-  showImagePreviewRef.value = false
+function swipePrev() {
+  swipeRef.value?.prev()
+}
+
+function swipeNext() {
+  swipeRef.value?.next()
+}
+
+function handleTabWheel(e) {
+  e.preventDefault()
+  const el = tabListRef.value
+  if (!el) return
+  const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+  el.scrollBy({ left: delta, behavior: 'smooth' })
 }
 
 function updateViewport() {
   isMobile.value = window.matchMedia('(max-width: 639px)').matches
+}
+
+const searchScrollRef = ref(null)
+
+function getScrollEl() {
+  return isSearchView.value ? searchScrollRef.value : contentSectionRef.value
+}
+
+function handleSectionScroll() {
+  const el = getScrollEl()
+  showBackTop.value = el && el.scrollTop > 400
+}
+
+function scrollToTopSection() {
+  const el = getScrollEl()
+  if (el) el.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 function openCoupon(product = selectedProduct.value) {
@@ -194,17 +268,21 @@ async function loadCategories() {
   }
 }
 
+function createObserver(root) {
+  return new IntersectionObserver(([entry]) => {
+    if (entry.isIntersecting && !loading.value && hasMore.value) {
+      requestProducts()
+    }
+  }, { root, rootMargin: '200px' })
+}
+
 onMounted(async () => {
   await loadCategories()
   updateViewport()
   window.addEventListener('resize', updateViewport)
   requestProducts(true)
 
-  observer = new IntersectionObserver(([entry]) => {
-    if (entry.isIntersecting && !loading.value && hasMore.value) {
-      requestProducts()
-    }
-  }, { rootMargin: '200px' })
+  observer = createObserver(null)
   nextTick(() => {
     if (scrollSentinel.value) observer.observe(scrollSentinel.value)
   })
@@ -216,21 +294,24 @@ onUnmounted(() => {
 })
 
 watch(scrollSentinel, (el, old) => {
-  if (observer) {
-    if (old) observer.unobserve(old)
-    if (el) observer.observe(el)
+  if (old && observer) observer.unobserve(old)
+  if (el) {
+    // 根据当前视图重建 observer
+    if (observer) observer.disconnect()
+    const root = !isSearchView.value ? contentSectionRef.value : searchScrollRef.value
+    observer = createObserver(root)
+    observer.observe(el)
   }
 })
 
-watch([isSearchView, activeCategory], async () => {
-  await nextTick()
-  // 视图切换后 scrollSentinel DOM 已更新，watch(scrollSentinel) 会自动重新观察
+watch(isSearchView, () => {
+  showBackTop.value = false
 })
 </script>
 
 <template>
   <div class="app-shell">
-    <header class="sticky top-0 z-30 border-b border-line bg-[#f7f8fa]/95 backdrop-blur">
+    <header v-if="!isSearchView" class="sticky top-0 z-30 border-b border-line bg-[#f7f8fa]/95 backdrop-blur">
       <div class="content-width relative flex h-[68px] items-center justify-between">
         <a class="flex shrink-0 items-center gap-2 text-ink no-underline" href="#top" aria-label="省心券首页">
           <img :src="logoUrl" alt="省心券" class="h-9 w-9 rounded-[9px] object-contain shadow-sm" />
@@ -242,65 +323,72 @@ watch([isSearchView, activeCategory], async () => {
 
     <!-- 搜索独立页面 -->
     <template v-if="isSearchView">
-      <header class="sticky top-0 z-30 border-b border-line bg-[#f7f8fa]/95 backdrop-blur">
-        <div class="content-width flex h-[68px] items-center gap-3">
-          <button type="button" class="grid h-10 w-10 shrink-0 place-items-center rounded-[8px] text-[22px] text-ink transition hover:bg-white" title="返回" @click="closeSearchView"><i class="ri-arrow-left-line"></i></button>
-          <img :src="logoUrl" alt="省心券" class="h-8 w-8 rounded-[8px] object-contain" />
-          <h1 class="text-[18px] font-semibold tracking-[-.02em] text-ink">省心券</h1>
-        </div>
-      </header>
-      <section class="content-width pt-5">
-        <div class="flex items-center gap-2">
-          <i class="ri-search-line text-[20px] text-muted"></i>
-          <h2 class="text-[18px] font-medium text-ink">{{ query }}</h2>
-        </div>
-      </section>
-      <section class="content-width pb-28 pt-5 sm:pb-14">
-        <div v-if="loading && !products.length" class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 sm:gap-4">
-          <div v-for="i in 8" :key="i" class="overflow-hidden rounded-[8px] border border-line bg-white"><div class="aspect-square animate-pulse bg-[#eceef1]"></div><div class="space-y-3 p-3"><div class="h-4 animate-pulse rounded bg-[#eceef1]"></div><div class="h-4 w-2/3 animate-pulse rounded bg-[#eceef1]"></div><div class="h-8 animate-pulse rounded bg-[#eceef1]"></div></div></div>
-        </div>
-        <div v-else-if="products.length" class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 sm:gap-4">
-          <article v-for="product in products" :key="product.id" class="group relative overflow-hidden rounded-[8px] border border-line bg-white transition duration-200 hover:-translate-y-0.5 hover:border-[#dfe2e6] hover:shadow-soft">
-            <button type="button" class="block w-full text-left" @click="openDetail(product)">
-              <div class="relative aspect-square overflow-hidden bg-[#f2f3f5]"><img v-lazy="product.image" :alt="product.title" class="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" /><span class="absolute bottom-2 left-2 rounded-[4px] bg-ink/85 px-2 py-1 text-[10px] font-medium text-white">{{ product.tag }}</span></div>
-              <div class="p-3 pb-2.5">
-                <h3 class="line-clamp-2 min-h-[40px] text-[13px] font-medium leading-5 text-ink">{{ product.title }}</h3>
-                <div class="mt-2 flex items-center gap-1 text-[11px] text-muted"><i class="ri-store-2-line"></i><span class="truncate">{{ product.shop }}</span></div>
-                <div class="mt-3 flex items-end justify-between gap-1"><div><span class="text-[11px] text-muted">券后</span><span class="ml-0.5 text-[20px] font-semibold leading-none text-brand">¥{{ money(product.finalPrice) }}</span></div><span class="shrink-0 text-[10px] text-muted">已售{{ formatSold(product.sold) }}</span></div>
-                <div class="mt-2 flex items-center gap-2"><span class="rounded-[3px] border border-dashed border-brand/50 bg-[#fff5f5] px-1.5 py-0.5 text-[10px] font-medium text-brand">券 ¥{{ money(product.coupon) }}</span><span class="text-[11px] text-muted line-through">¥{{ money(product.originalPrice) }}</span></div>
-              </div>
-            </button>
-            <div class="flex gap-2 px-3 pb-3"><button type="button" class="flex h-9 min-w-0 flex-1 items-center justify-center overflow-hidden whitespace-nowrap rounded-[6px] border border-line px-1 text-[11px] font-medium text-ink transition hover:border-ink sm:text-[12px]" @click="copyTaokouling(product)"><i class="ri-file-copy-line mr-1 shrink-0 text-[15px]"></i><span class="truncate">复制淘口令</span></button><button type="button" class="grid h-9 w-10 shrink-0 place-items-center rounded-[6px] bg-brand text-[17px] text-white transition hover:bg-brandDeep" title="打开优惠券页面" @click="openCoupon(product)"><i class="ri-external-link-line"></i></button></div>
-          </article>
-        </div>
-        <div v-else class="rounded-[8px] border border-dashed border-line bg-white px-5 py-16 text-center"><i class="ri-search-eye-line text-[42px] text-[#c4c8ce]"></i><p class="mt-3 text-[14px] font-medium text-ink">没有找到相关优惠券</p><p class="mt-1 text-[13px] text-muted">换个关键词试试</p></div>
-        <div v-if="products.length && loading" class="mt-7 text-center text-[13px] text-muted"><i class="ri-loader-4-line animate-spin mr-1 text-[16px]"></i>正在加载更多</div>
-        <div v-else-if="products.length && !hasMore" class="mt-8 flex items-center justify-center gap-2 text-[12px] text-muted"><span class="h-px w-12 bg-line"></span>已经到底啦<span class="h-px w-12 bg-line"></span></div>
-        <div ref="scrollSentinel" class="h-px"></div>
-      </section>
+      <div class="relative flex flex-1 flex-col overflow-hidden">
+        <!-- 搜索页 header：固定，不随商品列表滚动 -->
+        <section class="shrink-0 border-b border-line bg-[#f7f8fa]/95 backdrop-blur z-20">
+          <div class="content-width flex h-[68px] items-center gap-3">
+            <button type="button" class="grid h-10 w-10 shrink-0 place-items-center rounded-[8px] text-[22px] text-ink transition hover:bg-white" title="返回" @click="closeSearchView"><i class="ri-arrow-left-line"></i></button>
+            <img :src="logoUrl" alt="省心券" class="h-8 w-8 rounded-[8px] object-contain" />
+            <h1 class="text-[18px] font-semibold tracking-[-.02em] text-ink">省心券</h1>
+          </div>
+        </section>
+        <!-- 可滚动区域：搜索输入 + 商品列表 -->
+        <section ref="searchScrollRef" class="content-width flex-1 overflow-y-auto" @scroll="handleSectionScroll">
+          <div class="pt-5">
+            <div class="relative flex items-center gap-2 rounded-[8px] border border-line bg-white px-4 py-3">
+              <i class="ri-search-line shrink-0 text-[20px] text-muted"></i>
+              <input
+                v-model="query"
+                @keyup.enter="requestProducts(true)"
+                class="min-w-0 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-[#a4a8ae]"
+                :placeholder="`搜索：${query || '输入商品名称'}`"
+                @focus="$event.target.select()"
+              />
+            </div>
+          </div>
+          <div class="pb-28 pt-5 sm:pb-14">
+            <div v-if="loading && !products.length" class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 sm:gap-4">
+              <div v-for="i in 8" :key="i" class="overflow-hidden rounded-[8px] border border-line bg-white"><div class="aspect-square animate-pulse bg-[#eceef1]"></div><div class="space-y-3 p-3"><div class="h-4 animate-pulse rounded bg-[#eceef1]"></div><div class="h-4 w-2/3 animate-pulse rounded bg-[#eceef1]"></div><div class="h-8 animate-pulse rounded bg-[#eceef1]"></div></div></div>
+            </div>
+            <div v-else-if="products.length" class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 sm:gap-4">
+              <article v-for="product in products" :key="product.id" class="group relative overflow-hidden rounded-[8px] border border-line bg-white transition duration-200 hover:-translate-y-0.5 hover:border-[#dfe2e6] hover:shadow-soft">
+                <button type="button" class="block w-full text-left" @click="openDetail(product)">
+                  <div class="relative aspect-square overflow-hidden bg-[#f2f3f5]"><img v-lazy="product.image" :alt="product.title" class="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" /><span class="absolute bottom-2 left-2 rounded-[4px] bg-ink/85 px-2 py-1 text-[10px] font-medium text-white">{{ product.tag }}</span></div>
+                  <div class="p-3 pb-2.5">
+                    <h3 class="line-clamp-2 min-h-[40px] text-[13px] font-medium leading-5 text-ink">{{ product.title }}</h3>
+                    <div class="mt-2 flex items-center gap-1 text-[11px] text-muted"><i class="ri-store-2-line"></i><span class="truncate">{{ product.shop }}</span></div>
+                    <div class="mt-3 flex items-end justify-between gap-1"><div><span class="text-[11px] text-muted">券后</span><span class="ml-0.5 text-[20px] font-semibold leading-none text-brand">¥{{ money(product.finalPrice) }}</span></div><span class="shrink-0 text-[10px] text-muted">已售{{ formatSold(product.sold) }}</span></div>
+                    <div class="mt-2 flex items-center gap-2"><span class="rounded-[3px] border border-dashed border-brand/50 bg-[#fff5f5] px-1.5 py-0.5 text-[10px] font-medium text-brand">券 ¥{{ money(product.coupon) }}</span><span class="text-[11px] text-muted line-through">¥{{ money(product.originalPrice) }}</span></div>
+                  </div>
+                </button>
+                <div class="flex gap-2 px-3 pb-3"><button type="button" class="flex h-9 min-w-0 flex-1 items-center justify-center overflow-hidden whitespace-nowrap rounded-[6px] border border-line px-1 text-[11px] font-medium text-ink transition hover:border-ink sm:text-[12px]" @click="copyTaokouling(product)"><i class="ri-file-copy-line mr-1 shrink-0 text-[15px]"></i><span class="truncate">复制淘口令</span></button><button type="button" class="grid h-9 w-10 shrink-0 place-items-center rounded-[6px] bg-brand text-[17px] text-white transition hover:bg-brandDeep" title="打开优惠券页面" @click="openCoupon(product)"><i class="ri-external-link-line"></i></button></div>
+              </article>
+            </div>
+            <div v-else class="rounded-[8px] border border-dashed border-line bg-white px-5 py-16 text-center"><i class="ri-search-eye-line text-[42px] text-[#c4c8ce]"></i><p class="mt-3 text-[14px] font-medium text-ink">没有找到相关优惠券</p><p class="mt-1 text-[13px] text-muted">换个关键词试试</p></div>
+            <div v-if="products.length && loading" class="mt-7 text-center text-[13px] text-muted"><i class="ri-loader-4-line animate-spin mr-1 text-[16px]"></i>正在加载更多</div>
+            <div v-else-if="products.length && !hasMore" class="mt-8 flex items-center justify-center gap-2 text-[12px] text-muted"><span class="h-px w-12 bg-line"></span>已经到底啦<span class="h-px w-12 bg-line"></span></div>
+            <div ref="scrollSentinel" class="h-px"></div>
+          </div>
+        </section>
+        <button v-if="showBackTop" type="button" class="absolute bottom-6 right-6 z-10 grid h-10 w-10 place-items-center rounded-full border border-line bg-white text-[18px] text-ink shadow-soft transition hover:bg-[#f5f6f8]" @click="scrollToTopSection"><i class="ri-arrow-up-line"></i></button>
+      </div>
     </template>
 
     <!-- 首页（分类 tabs） -->
     <template v-else>
-      <main id="top">
-        <section class="sticky top-[68px] z-20 border-b border-line bg-[#f7f8fa]/95 py-3 backdrop-blur">
+      <main id="top" class="flex flex-1 flex-col overflow-hidden">
+        <section class="shrink-0 border-b border-line bg-[#f7f8fa]/95 py-3 backdrop-blur z-20">
           <div class="content-width">
-            <div class="no-scrollbar flex gap-2 overflow-x-auto">
+            <div ref="tabListRef" class="no-scrollbar flex gap-2 overflow-x-auto" @wheel.prevent="handleTabWheel">
               <button v-for="category in categories" :key="category.id" type="button" class="flex h-10 shrink-0 items-center gap-2 rounded-[8px] border px-4 text-[13px] font-medium transition" :class="activeCategory === category.id ? 'border-ink bg-ink text-white shadow-sm' : 'border-line bg-white text-muted hover:border-[#cfd3d8] hover:text-ink'" @click="chooseCategory(category)">
-                <i :class="category.icon || 'ri-price-tag-3-line'" class="text-[16px]"></i>{{ category.label }}
+                <i v-if="category.icon && !category.icon.startsWith('ri-')" :class="'text-[16px]'" v-html="category.icon"></i>
+                <i v-else :class="category.icon || 'ri-price-tag-3-line'" class="text-[16px]"></i>{{ category.label }}
               </button>
             </div>
           </div>
         </section>
 
-        <section class="content-width pb-28 pt-7 sm:pb-14 sm:pt-9">
-          <div class="mb-4 flex items-end justify-between gap-3">
-            <div>
-              <div class="flex items-center gap-2"><h2 class="text-[20px] font-semibold tracking-[-.02em] text-ink">{{ selectedCategoryLabel }}</h2></div>
-              <p class="mt-1 text-[13px] text-muted">今天值得下单的优惠，都在这里</p>
-            </div>
-            <div class="hidden items-center gap-2 text-[12px] text-muted sm:flex"><i class="ri-shield-check-line text-[16px] text-[#27a36a]"></i>价格实时参考淘宝</div>
-          </div>
+        <section ref="contentSectionRef" class="product-section content-width flex-1 pb-28 pt-7 sm:pb-14 sm:pt-9 relative" @scroll="handleSectionScroll">
 
           <div v-if="loading && !products.length" class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 sm:gap-4">
             <div v-for="i in 8" :key="i" class="overflow-hidden rounded-[8px] border border-line bg-white"><div class="aspect-square animate-pulse bg-[#eceef1]"></div><div class="space-y-3 p-3"><div class="h-4 animate-pulse rounded bg-[#eceef1]"></div><div class="h-4 w-2/3 animate-pulse rounded bg-[#eceef1]"></div><div class="h-8 animate-pulse rounded bg-[#eceef1]"></div></div></div>
@@ -325,6 +413,7 @@ watch([isSearchView, activeCategory], async () => {
           <div v-else-if="products.length && !hasMore" class="mt-8 flex items-center justify-center gap-2 text-[12px] text-muted"><span class="h-px w-12 bg-line"></span>已经到底啦<span class="h-px w-12 bg-line"></span></div>
           <div ref="scrollSentinel" class="h-px"></div>
         </section>
+        <button v-if="showBackTop" type="button" class="absolute bottom-6 right-6 z-10 grid h-10 w-10 place-items-center rounded-full border border-line bg-white text-[18px] text-ink shadow-soft transition hover:bg-[#f5f6f8]" @click="scrollToTopSection"><i class="ri-arrow-up-line"></i></button>
       </main>
     </template>
 
@@ -360,15 +449,42 @@ watch([isSearchView, activeCategory], async () => {
         </div>
         <div class="detail-body">
           <div class="relative overflow-hidden rounded-[8px] bg-[#f2f3f5]">
-            <div class="relative cursor-pointer" @click="openImagePreview()">
-              <van-swipe v-if="(selectedProduct.images || []).length > 1" :autoplay="0" :loop="true" indicator-color="transparent" style="height: 100%" @change="idx => detailImageIndex = idx">
-                <van-swipe-item v-for="(img, i) in selectedProduct.images" :key="i"><img :src="img" :alt="`${selectedProduct.title} - ${i + 1}`" class="aspect-[1.15] h-full w-full object-cover" /></van-swipe-item>
+            <div class="group relative cursor-pointer" @click="openImagePreview()">
+              <van-swipe
+                v-if="detailImages.length > 1"
+                ref="swipeRef"
+                :autoplay="0"
+                :loop="true"
+                indicator-color="transparent"
+                style="height: 100%"
+                @change="idx => detailImageIndex = idx"
+              >
+                <van-swipe-item v-for="(img, i) in detailImages" :key="i">
+                  <img :src="img" :alt="`${selectedProduct.title} - ${i + 1}`" class="aspect-[1.15] h-full w-full object-cover" />
+                </van-swipe-item>
               </van-swipe>
-              <img v-else :src="selectedProduct.image" :alt="selectedProduct.title" class="aspect-[1.15] w-full object-cover" />
+              <img v-else :src="selectedProduct.image" :alt="selectedProduct.title" class="aspect-[1.15] w-full" />
+              <!-- PC端鼠标悬停时显示左右指示器 -->
+              <template v-if="detailImages.length > 1">
+                <button
+                  type="button"
+                  class="absolute left-2 top-1/2 hidden h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-black/30 text-[18px] text-white opacity-0 transition group-hover:opacity-100 sm:grid"
+                  :class="detailImageIndex === 0 ? 'pointer-events-none opacity-0' : ''"
+                  title="上一张"
+                  @click.stop="swipePrev()"
+                ><i class="ri-arrow-left-s-line"></i></button>
+                <button
+                  type="button"
+                  class="absolute right-2 top-1/2 hidden h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-black/30 text-[18px] text-white opacity-0 transition group-hover:opacity-100 sm:grid"
+                  :class="detailImageIndex >= detailImages.length - 1 ? 'pointer-events-none opacity-0' : ''"
+                  title="下一张"
+                  @click.stop="swipeNext()"
+                ><i class="ri-arrow-right-s-line"></i></button>
+              </template>
             </div>
             <div class="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1">
               <i class="ri-zoom-in-line text-[13px] text-white/90 drop-shadow" aria-hidden="true"></i>
-              <span v-if="(selectedProduct.images || []).length > 1" class="rounded-full bg-black/55 px-2 py-0.5 text-[11px] text-white">{{ detailImageIndex + 1 }}/{{ selectedProduct.images.length }}</span>
+              <span v-if="detailImages.length > 1" class="rounded-full bg-black/55 px-2 py-0.5 text-[11px] text-white">{{ detailImageIndex + 1 }}/{{ detailImages.length }}</span>
             </div>
           </div>
           <div class="mt-5"><div><span class="rounded-[4px] bg-[#fff2f2] px-2 py-1 text-[11px] font-medium text-brand">{{ selectedProduct.tag }}</span><h2 class="mt-3 text-[19px] font-semibold leading-7 text-ink">{{ selectedProduct.title }}</h2><div class="mt-2 flex items-center gap-1 text-[12px] text-muted"><i class="ri-store-2-line"></i>{{ selectedProduct.shop }}<span class="mx-1 text-[#d5d8dc]">·</span>已售{{ formatSold(selectedProduct.sold) }}</div></div></div>
@@ -376,12 +492,6 @@ watch([isSearchView, activeCategory], async () => {
           <div class="mt-6 rounded-[8px] border border-dashed border-[#f5b7b7] bg-[#fff9f9] p-4"><div class="flex items-center gap-2 text-[13px] font-medium text-brand"><i class="ri-coupon-3-line text-[18px]"></i>专享优惠券</div><p class="mt-2 text-[12px] leading-5 text-muted">先领券再下单，优惠以淘宝页面实时展示为准。你可以复制淘口令，也可以直接打开领券页面。</p></div>
           <div class="mt-6 grid grid-cols-2 gap-3"><button type="button" class="flex h-12 items-center justify-center gap-2 whitespace-nowrap rounded-[7px] border border-line text-[13px] font-medium text-ink transition hover:border-ink" @click="copyTaokouling()"><i class="ri-file-copy-line text-[18px]"></i>复制淘口令</button><button type="button" class="flex h-12 items-center justify-center gap-2 whitespace-nowrap rounded-[7px] bg-brand text-[13px] font-medium text-white transition hover:bg-brandDeep" @click="openCoupon()"><i class="ri-external-link-line text-[18px]"></i>打开优惠券页面</button></div>
         </div>
-        <van-image-preview
-          v-model="showImagePreviewRef"
-          :images="previewImagesList"
-          :start-position="detailImageIndex"
-          @close="closeImagePreview"
-        />
       </template>
     </van-popup>
   </div>

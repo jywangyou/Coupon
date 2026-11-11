@@ -11,8 +11,20 @@
 }
 
 * { box-sizing: border-box; }
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-shell {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 html { background: #f7f8fa; }
-body { margin: 0; min-width: 320px; background: #f7f8fa; }
+body { margin: 0; min-width: 320px; background: #f7f8fa; height: 100%; overflow: hidden; }
 button, input { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 
@@ -49,4 +61,8 @@ button { -webkit-tap-highlight-color: transparent; }
 @media (max-width: 640px) {
   .content-width { width: min(100% - 24px, 560px); }
   .detail-body { padding: 16px 16px 28px; }
+}
+
+.product-section {
+  overflow-y: auto;
 }
