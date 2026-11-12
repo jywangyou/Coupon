@@ -1,0 +1,46 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // 直接启动 Node API，断点可命中 server/index.js、server/taobao.js、server/jd.js 等所有后端文件
+      "type": "node",
+      "request": "launch",
+      "name": "调试后端 API",
+      "program": "${workspaceFolder}/server/index.js",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "API_PORT": "3001"
+      },
+      "skipFiles": ["<node_internals>/**", "node_modules/**"]
+    },
+    {
+      // 单独启动前端 Vite（配合上面的后端调试使用）
+      "type": "node",
+      "request": "launch",
+      "name": "启动前端 Vite",
+      "program": "${workspaceFolder}/node_modules/vite/bin/vite.js",
+      "args": ["--host", "0.0.0.0"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**", "node_modules/**"]
+    },
+    {
+      // 已经用 npm run dev:api 启动后端时，附加到该进程调试
+      "type": "node",
+      "request": "attach",
+      "name": "附加到后端（9229）",
+      "port": 9229,
+      "restart": true,
+      "skipFiles": ["<node_internals>/**", "node_modules/**"]
+    }
+  ],
+  "compounds": [
+    {
+      // 一次启动前后端，前后端都能打断点
+      "name": "全栈调试（Vite + API）",
+      "configurations": ["调试后端 API", "启动前端 Vite"],
+      "stopAll": true
+    }
+  ]
+}

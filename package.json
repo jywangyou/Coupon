@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:api": "node server/index.js",
+    "dev:api:debug": "node --inspect=9229 server/index.js",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "dev:client": "vite --host 0.0.0.0"
@@ -16,9 +17,9 @@
     "express": "^4.21.2",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
+    "vant": "^4.9.19",
     "vite": "^6.0.7",
     "vue": "^3.5.13",
-    "vant": "^4.9.19"
-  },
-  "devDependencies": {}
+    "vue-router": "^4.6.4"
+  }
 }

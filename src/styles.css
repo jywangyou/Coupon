@@ -66,3 +66,13 @@ button { -webkit-tap-highlight-color: transparent; }
 .product-section {
   overflow-y: auto;
 }
+
+/* 平台主题：同一套组件，用 CSS 变量切换淘宝红 / 京东红 */
+.platform { --brand: #ff4d4f; --brand-deep: #d9363e; }
+.platform--jd { --brand: #e1251b; --brand-deep: #b81b13; }
+
+.brand-text { color: var(--brand); }
+.brand-bg { background-color: var(--brand); }
+.brand-bg:hover { background-color: var(--brand-deep); }
+.brand-chip { border: 1px dashed #f3b6b6; background: #fff5f5; color: var(--brand); }
+
